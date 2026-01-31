@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Soccer Runner</title>
+    <script src="https://unpkg.com/three@0.150.0/build/three.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background: #1a3a5c;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+        }
+        #score {
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        #pauseBtn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            background: rgba(0,150,200,0.8);
+            border: none;
+            border-radius: 10px;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            z-index: 100;
+        }
+        #menu, #gameover {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 200;
+        }
+        .hidden { display: none !important; }
+        h1 { font-size: 48px; margin-bottom: 20px; }
+        .btn {
+            background: #0ea5e9;
+            border: none;
+            padding: 15px 40px;
+            font-size: 20px;
+            color: white;
+            border-radius: 30px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        .btn:hover { background: #0284c7; }
+        #cameraPreview {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 200px;
+            border: 3px solid #0ea5e9;
+            border-radius: 10px;
+            z-index: 100;
+            overflow: hidden;
+        }
+        #cameraPreview video {
+            width: 100%;
+            display: block;
+            border-radius: 7px;
+            transform: scaleX(-1);
+        }
+        #cameraPreview canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: 7px;
+            pointer-events: none;
+        }
+        .instructions {
+            text-align: center;
+            margin: 20px;
+            line-height: 1.6;
+        }
+        /* Menu camera setup */
+        #menuCameraBox {
+            width: 400px;
+            height: 300px;
+            background: #222;
+            border: 3px solid #0ea5e9;
+            border-radius: 15px;
+            margin: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        #menuCameraBox video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            display: block;
+        }
+        #menuCameraBox canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        #cameraStatus {
+            background: rgba(0,0,0,0.7);
+            padding: 10px 20px;
+            border-radius: 20px;
+            margin: 10px;
+            font-size: 16px;
+        }
+        #cameraStatus.detected { color: #4ade80; }
+        #cameraStatus.not-detected { color: #f87171; }
+        .btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div id="menu">
+        <h1>SOCCER RUNNER</h1>
+        <div class="instructions">
+            <p>Steruj pomaranczowa pilka przed kamera</p>
+            <p>lub uzywaj strzalek ← →</p>
+        </div>
+        <div id="menuCameraBox">
+            <video id="menuVideo" autoplay playsinline muted></video>
+            <canvas id="menuCanvas"></canvas>
+        </div>
+        <div id="cameraStatus">Kliknij "Wlacz kamere"</div>
+        <button class="btn" id="cameraBtn">Wlacz kamere</button>
+        <button class="btn" id="startBtn" disabled>START GRY</button>
+    </div>
+
+    <div id="gameover" class="hidden">
+        <h1>KONIEC GRY</h1>
+        <p style="font-size:32px">Wynik: <span id="finalScore">0</span></p>
+        <button class="btn" id="restartBtn">ZAGRAJ PONOWNIE</button>
+    </div>
+
+    <div id="ui">
+        <div id="score">WYNIK: <span id="scoreValue">0</span></div>
+    </div>
+    <button id="pauseBtn">⏸</button>
+
+    <div id="cameraPreview">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="debugCanvas"></canvas>
+    </div>
+
+    <script>
+        // ============ GAME CONFIG ============
+        const CONFIG = {
+            trackWidth: 4,
+            trackLength: 500,       // LONGER track
+            ballRadius: 0.4,
+            coneRadius: 0.35,
+            baseSpeed: 6,           // 3x SLOWER
+            maxSpeed: 15,           // 3x SLOWER max
+            spawnDistance: 50,      // Cones spawn further
+            spawnInterval: 12,      // Less frequent cones
+            lanes: [-1.2, 0, 1.2],
+            stripeSpacing: 4,       // Space between stripes
+            // CV
+            hueMin: 5,
+            hueMax: 35,
+            satMin: 70,
+            valMin: 70,
+            smoothing: 0.3
+        };
+
+        // ============ GLOBALS ============
+        let scene, camera, renderer;
+        let ball, track, ground, trackStripes = [], obstacles = [];
+        let isRunning = false, isPaused = false;
+        let score = 0, speed = CONFIG.baseSpeed;
+        let playerX = 0, targetX = 0;
+        let lastSpawnZ = 0;
+        let clock;
+
+        // CV
+        let video, debugCanvas, debugCtx;
+        let detectedX = 0.5, smoothedX = 0.5;
+        let ballDetected = false;
+
+        // Keys
+        let keys = { left: false, right: false };
+
+        // ============ INIT ============
+        function init() {
+            // Scene - dark blue sky
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1e3a5f);
+            scene.fog = new THREE.Fog(0x1e3a5f, 80, 200);
+
+            // Camera - CLOSER and MORE FROM ABOVE
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
+            camera.position.set(0, 3.5, 4);  // Higher Y, closer Z
+            camera.lookAt(0, 0, -8);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // Lights
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const sun = new THREE.DirectionalLight(0xffffff, 0.6);
+            sun.position.set(5, 20, 10);
+            sun.castShadow = true;
+            scene.add(sun);
+            scene.add(new THREE.HemisphereLight(0x87ceeb, 0xe0f4ff, 0.5));
+
+            // Ground - light gray/white
+            const groundGeo = new THREE.PlaneGeometry(2000, 2000);
+            const groundMat = new THREE.MeshBasicMaterial({ color: 0x87ceeb, side: THREE.DoubleSide });  // Sky blue ground
+            ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.1;
+            scene.add(ground);
+
+            // Mountains - DISABLED
+            // createMountains();
+
+            // Track - GREEN, VERY LONG
+            const trackGeo = new THREE.PlaneGeometry(CONFIG.trackWidth, 1000);  // Very long
+            const trackMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, side: THREE.DoubleSide });
+            track = new THREE.Mesh(trackGeo, trackMat);
+            track.rotation.x = -Math.PI / 2;
+            track.position.set(0, 0.01, 0);
+            scene.add(track);
+
+            // Track edges - DARK GREEN (part of track group)
+            const edgeMat = new THREE.MeshLambertMaterial({ color: 0x166534 });
+            [-1, 1].forEach(side => {
+                const edge = new THREE.Mesh(
+                    new THREE.PlaneGeometry(0.15, CONFIG.trackLength),
+                    edgeMat
+                );
+                edge.rotation.x = -Math.PI / 2;
+                edge.position.set(side * CONFIG.trackWidth/2, 0.02, 0);
+                track.add(edge);  // Add to track so it moves together
+            });
+
+            // White stripes - THICK and VISIBLE (both directions)
+            const stripeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            // Stripes ahead AND behind - more stripes for better coverage
+            for (let z = 30; z > -90; z -= CONFIG.stripeSpacing) {
+                const stripe = new THREE.Mesh(
+                    new THREE.PlaneGeometry(CONFIG.trackWidth - 0.2, 1.8),
+                    stripeMat
+                );
+                stripe.rotation.x = -Math.PI / 2;
+                stripe.position.set(0, 0.03, z);
+                scene.add(stripe);
+                trackStripes.push(stripe);
+            }
+
+            // Ball (white with brown patches)
+            createBall();
+
+            // Clock
+            clock = new THREE.Clock();
+
+            // Events
+            window.addEventListener('resize', onResize);
+            document.addEventListener('keydown', e => {
+                if (e.key === 'ArrowLeft') keys.left = true;
+                if (e.key === 'ArrowRight') keys.right = true;
+            });
+            document.addEventListener('keyup', e => {
+                if (e.key === 'ArrowLeft') keys.left = false;
+                if (e.key === 'ArrowRight') keys.right = false;
+            });
+
+            // Buttons
+            document.getElementById('cameraBtn').onclick = setupMenuCamera;
+            document.getElementById('startBtn').onclick = startGame;
+            document.getElementById('restartBtn').onclick = startGame;
+            document.getElementById('pauseBtn').onclick = togglePause;
+
+            // Initial render
+            renderer.render(scene, camera);
+        }
+
+        function createMountains() {
+            const mountainMat = new THREE.MeshLambertMaterial({ color: 0x2d4a6a });
+            const snowMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+
+            [
+                { x: -35, z: -70, s: 1.4 },
+                { x: -15, z: -80, s: 1.1 },
+                { x: 5, z: -90, s: 1.6 },
+                { x: 30, z: -75, s: 1.3 },
+                { x: 55, z: -85, s: 1.5 },
+                { x: -55, z: -85, s: 1.2 }
+            ].forEach(m => {
+                const h = 18 * m.s;
+                const r = 10 * m.s;
+                const mountain = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5), mountainMat);
+                mountain.position.set(m.x, h/2 - 2, m.z);
+                scene.add(mountain);
+
+                const snow = new THREE.Mesh(new THREE.ConeGeometry(r*0.35, h*0.25, 5), snowMat);
+                snow.position.set(m.x, h - h*0.12 - 2, m.z);
+                scene.add(snow);
+            });
+        }
+
+        function createBall() {
+            ball = new THREE.Group();
+
+            // Main sphere - ORANGE
+            const ballMesh = new THREE.Mesh(
+                new THREE.SphereGeometry(CONFIG.ballRadius, 32, 32),
+                new THREE.MeshPhongMaterial({ color: 0xff6600, shininess: 80 })
+            );
+            ballMesh.castShadow = true;
+            ball.add(ballMesh);
+
+            // BLACK patches/pentagons
+            const pentMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            [
+                [0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]
+            ].forEach(dir => {
+                const pent = new THREE.Mesh(new THREE.CircleGeometry(0.12, 5), pentMat);
+                pent.position.set(dir[0] * 0.41, dir[1] * 0.41, dir[2] * 0.41);
+                pent.lookAt(0, 0, 0);
+                ball.add(pent);
+            });
+
+            ball.position.set(0, CONFIG.ballRadius, 0);
+            scene.add(ball);
+        }
+
+        function createCone(x, z) {
+            const cone = new THREE.Group();
+
+            // Orange base
+            const base = new THREE.Mesh(
+                new THREE.BoxGeometry(0.45, 0.06, 0.45),
+                new THREE.MeshPhongMaterial({ color: 0xff6600 })
+            );
+            base.position.y = 0.03;
+            base.castShadow = true;
+            cone.add(base);
+
+            // Orange cone
+            const coneMesh = new THREE.Mesh(
+                new THREE.ConeGeometry(0.2, 0.65, 8),
+                new THREE.MeshPhongMaterial({ color: 0xff6600 })
+            );
+            coneMesh.position.y = 0.38;
+            coneMesh.castShadow = true;
+            cone.add(coneMesh);
+
+            // White stripes
+            const stripeMat = new THREE.MeshPhongMaterial({ color: 0xffffff });
+            const s1 = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, 0.1, 8), stripeMat);
+            s1.position.y = 0.3;
+            cone.add(s1);
+            const s2 = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.08, 8), stripeMat);
+            s2.position.y = 0.5;
+            cone.add(s2);
+
+            cone.position.set(x, 0, z);
+            cone.userData = { passed: false };
+            scene.add(cone);
+            obstacles.push(cone);
+        }
+
+        // ============ CAMERA (CV) ============
+        let menuVideo, menuCanvas, menuCtx;
+        let cameraStream = null;
+
+        async function setupMenuCamera() {
+            const cameraBtn = document.getElementById('cameraBtn');
+            const startBtn = document.getElementById('startBtn');
+            const status = document.getElementById('cameraStatus');
+
+            cameraBtn.disabled = true;
+            cameraBtn.textContent = 'Uruchamianie...';
+            status.textContent = 'Laczenie z kamera...';
+
+            menuVideo = document.getElementById('menuVideo');
+            menuCanvas = document.getElementById('menuCanvas');
+            menuCtx = menuCanvas.getContext('2d', { willReadFrequently: true });
+
+            try {
+                cameraStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+                });
+
+                menuVideo.srcObject = cameraStream;
+
+                // Wait for video metadata
+                await new Promise((resolve) => {
+                    menuVideo.onloadedmetadata = resolve;
+                });
+
+                await menuVideo.play();
+
+                // Wait for first frame to be ready
+                await new Promise((resolve) => {
+                    if (menuVideo.readyState >= 2) {
+                        resolve();
+                    } else {
+                        menuVideo.oncanplay = resolve;
+                    }
+                });
+
+                // Additional small delay to ensure frames are available
+                await new Promise(r => setTimeout(r, 100));
+
+                console.log('Video ready:', menuVideo.videoWidth, 'x', menuVideo.videoHeight, 'state:', menuVideo.readyState);
+
+                menuCanvas.width = menuVideo.videoWidth || 640;
+                menuCanvas.height = menuVideo.videoHeight || 480;
+
+                cameraBtn.textContent = 'Kamera OK!';
+                cameraBtn.style.background = '#22c55e';
+                startBtn.disabled = false;
+                status.textContent = 'Pokaz pomaranczowa pilke!';
+                status.className = '';
+
+                // Start detection loop for menu
+                requestAnimationFrame(detectBallMenu);
+
+            } catch (e) {
+                console.error('Camera error:', e);
+                status.textContent = 'Blad kamery: ' + e.message;
+                status.className = 'not-detected';
+                cameraBtn.textContent = 'Sprobuj ponownie';
+                cameraBtn.disabled = false;
+                // Allow starting without camera
+                startBtn.disabled = false;
+            }
+        }
+
+        // Offscreen canvas for pixel processing
+        let offscreenCanvas, offscreenCtx;
+
+        function detectBallMenu() {
+            if (!menuVideo || !cameraStream) return;
+            if (document.getElementById('menu').classList.contains('hidden')) return;
+
+            const status = document.getElementById('cameraStatus');
+
+            // Make sure video has frames
+            if (menuVideo.readyState < 2 || menuVideo.videoWidth === 0) {
+                requestAnimationFrame(detectBallMenu);
+                return;
+            }
+
+            const vw = menuVideo.videoWidth;
+            const vh = menuVideo.videoHeight;
+
+            // Create offscreen canvas for pixel processing
+            if (!offscreenCanvas) {
+                offscreenCanvas = document.createElement('canvas');
+                offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+            }
+            offscreenCanvas.width = vw;
+            offscreenCanvas.height = vh;
+
+            // Draw video to offscreen canvas (not mirrored - for detection)
+            offscreenCtx.drawImage(menuVideo, 0, 0, vw, vh);
+
+            // Get pixels and detect orange
+            const img = offscreenCtx.getImageData(0, 0, vw, vh);
+            const d = img.data;
+            let sumX = 0, sumY = 0, count = 0;
+
+            for (let i = 0; i < d.length; i += 4) {
+                const hsv = rgbToHsv(d[i], d[i+1], d[i+2]);
+                if (hsv.h >= CONFIG.hueMin && hsv.h <= CONFIG.hueMax &&
+                    hsv.s >= CONFIG.satMin && hsv.v >= CONFIG.valMin) {
+                    const px = (i/4) % vw;
+                    const py = Math.floor((i/4) / vw);
+                    sumX += px;
+                    sumY += py;
+                    count++;
+                }
+            }
+
+            // Set overlay canvas size
+            menuCanvas.width = vw;
+            menuCanvas.height = vh;
+
+            // Clear overlay (transparent)
+            menuCtx.clearRect(0, 0, vw, vh);
+
+            if (count > 50) {
+                const cx = sumX / count;
+                const cy = sumY / count;
+                // Mirror X for display (video is CSS mirrored)
+                const displayX = vw - cx;
+
+                detectedX = cx / vw;  // Not mirrored for game control
+                ballDetected = true;
+                status.textContent = 'PILKA WYKRYTA! Mozesz grac!';
+                status.className = 'detected';
+
+                // Draw circle on overlay (mirrored position)
+                menuCtx.strokeStyle = '#00ff00';
+                menuCtx.lineWidth = 4;
+                menuCtx.beginPath();
+                menuCtx.arc(displayX, cy, 50, 0, Math.PI*2);
+                menuCtx.stroke();
+
+                // Draw crosshair
+                menuCtx.beginPath();
+                menuCtx.moveTo(displayX - 60, cy);
+                menuCtx.lineTo(displayX + 60, cy);
+                menuCtx.moveTo(displayX, cy - 60);
+                menuCtx.lineTo(displayX, cy + 60);
+                menuCtx.stroke();
+            } else {
+                ballDetected = false;
+                status.textContent = 'Pokaz pomaranczowa pilke...';
+                status.className = 'not-detected';
+            }
+
+            // Continue loop if menu is visible
+            if (!document.getElementById('menu').classList.contains('hidden')) {
+                requestAnimationFrame(detectBallMenu);
+            }
+        }
+
+        function rgbToHsv(r, g, b) {
+            r /= 255; g /= 255; b /= 255;
+            const max = Math.max(r, g, b), min = Math.min(r, g, b);
+            const d = max - min;
+            let h = 0;
+            if (d !== 0) {
+                if (max === r) h = ((g - b) / d + 6) % 6;
+                else if (max === g) h = (b - r) / d + 2;
+                else h = (r - g) / d + 4;
+                h *= 30;
+            }
+            return { h, s: max === 0 ? 0 : d / max * 255, v: max * 255 };
+        }
+
+        function detectBallGame() {
+            // Use the same camera stream from menu
+            if (!menuVideo || !cameraStream || !isRunning) return;
+
+            video = document.getElementById('video');
+            debugCanvas = document.getElementById('debugCanvas');
+            debugCtx = debugCanvas.getContext('2d');
+
+            // Set stream to game preview video element
+            if (video.srcObject !== cameraStream) {
+                video.srcObject = cameraStream;
+                video.play();
+            }
+
+            if (menuVideo.readyState < 2) {
+                if (isRunning) requestAnimationFrame(detectBallGame);
+                return;
+            }
+
+            const vw = menuVideo.videoWidth;
+            const vh = menuVideo.videoHeight;
+
+            // Use offscreen canvas for detection
+            if (!offscreenCanvas) {
+                offscreenCanvas = document.createElement('canvas');
+                offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+            }
+            offscreenCanvas.width = vw;
+            offscreenCanvas.height = vh;
+
+            offscreenCtx.drawImage(menuVideo, 0, 0, vw, vh);
+
+            const img = offscreenCtx.getImageData(0, 0, vw, vh);
+            const d = img.data;
+            let sumX = 0, sumY = 0, count = 0;
+
+            for (let i = 0; i < d.length; i += 4) {
+                const hsv = rgbToHsv(d[i], d[i+1], d[i+2]);
+                if (hsv.h >= CONFIG.hueMin && hsv.h <= CONFIG.hueMax &&
+                    hsv.s >= CONFIG.satMin && hsv.v >= CONFIG.valMin) {
+                    const px = (i/4) % vw;
+                    const py = Math.floor((i/4) / vw);
+                    sumX += px;
+                    sumY += py;
+                    count++;
+                }
+            }
+
+            // Set overlay canvas size
+            debugCanvas.width = vw;
+            debugCanvas.height = vh;
+            debugCtx.clearRect(0, 0, vw, vh);
+
+            if (count > 30) {
+                const cx = sumX / count;
+                const cy = sumY / count;
+                const displayX = vw - cx;  // Mirror for display
+
+                detectedX = cx / vw;
+                ballDetected = true;
+
+                // Draw marker on overlay
+                debugCtx.strokeStyle = '#00ff00';
+                debugCtx.lineWidth = 3;
+                debugCtx.beginPath();
+                debugCtx.arc(displayX, cy, 25, 0, Math.PI*2);
+                debugCtx.stroke();
+            } else {
+                ballDetected = false;
+            }
+
+            if (isRunning) requestAnimationFrame(detectBallGame);
+        }
+
+        // ============ GAME LOOP ============
+        function startGame() {
+            document.getElementById('menu').classList.add('hidden');
+            document.getElementById('gameover').classList.add('hidden');
+
+            // Reset
+            score = 0;
+            speed = CONFIG.baseSpeed;
+            playerX = 0;
+            targetX = 0;
+            lastSpawnZ = 0;
+            obstacles.forEach(o => scene.remove(o));
+            obstacles = [];
+            ball.position.set(0, CONFIG.ballRadius, 0);
+
+            isRunning = true;
+            isPaused = false;
+            clock.start();
+
+            // Start game camera detection
+            if (cameraStream) {
+                requestAnimationFrame(detectBallGame);
+            }
+
+            animate();
+        }
+
+        function togglePause() {
+            isPaused = !isPaused;
+            if (!isPaused) animate();
+        }
+
+        function gameOver() {
+            isRunning = false;
+            document.getElementById('finalScore').textContent = score;
+            document.getElementById('gameover').classList.remove('hidden');
+
+            // Restart menu detection if returning to menu
+            if (cameraStream) {
+                requestAnimationFrame(detectBallMenu);
+            }
+        }
+
+        function animate() {
+            if (!isRunning || isPaused) return;
+            requestAnimationFrame(animate);
+
+            const dt = Math.min(clock.getDelta(), 0.1);
+
+            // Input
+            if (ballDetected) {
+                smoothedX += (detectedX - smoothedX) * CONFIG.smoothing;
+                targetX = (smoothedX - 0.5) * 2 * (CONFIG.trackWidth/2 - 0.5);
+            }
+            if (keys.left) targetX -= 4 * dt;
+            if (keys.right) targetX += 4 * dt;
+            targetX = Math.max(-CONFIG.trackWidth/2 + 0.5, Math.min(CONFIG.trackWidth/2 - 0.5, targetX));
+
+            // Move player
+            playerX += (targetX - playerX) * 10 * dt;
+            ball.position.x = playerX;
+            ball.position.z -= speed * dt;
+
+            // ROLLING BALL EFFECT - rotate based on movement
+            ball.rotation.x -= speed * dt * 2.5;  // Forward roll (stronger)
+            ball.rotation.z += (targetX - playerX) * dt * 3;  // Side tilt when turning
+
+            // Camera follows - CLOSER and FROM ABOVE
+            camera.position.z = ball.position.z + 4;  // Closer
+            camera.position.y = 3.5;  // Higher
+            camera.position.x = playerX * 0.2;
+            camera.lookAt(playerX * 0.3, 0, ball.position.z - 8);
+
+            // Track and ground follow ball (centered)
+            track.position.z = ball.position.z;  // Track centered on ball (extends 500 each way)
+            ground.position.z = ball.position.z;
+
+            // Stripes recycle for infinite track (both directions)
+            trackStripes.forEach(s => {
+                // If stripe is too far behind camera, move it ahead
+                if (s.position.z > ball.position.z + 20) {
+                    s.position.z -= 120;  // Move ahead
+                }
+                // If stripe is too far ahead, move it behind
+                if (s.position.z < ball.position.z - 100) {
+                    s.position.z += 120;  // Move behind
+                }
+            });
+
+            // Ground follows ball
+            ground.position.z = ball.position.z;
+
+            // Spawn cones
+            if (ball.position.z < lastSpawnZ - CONFIG.spawnInterval) {
+                const numCones = Math.random() > 0.5 ? 2 : 1;
+                const usedLanes = [];
+                for (let i = 0; i < numCones; i++) {
+                    let lane;
+                    do { lane = CONFIG.lanes[Math.floor(Math.random() * 3)]; }
+                    while (usedLanes.includes(lane));
+                    usedLanes.push(lane);
+                    createCone(lane, ball.position.z - CONFIG.spawnDistance);
+                }
+                lastSpawnZ = ball.position.z;
+            }
+
+            // Check collisions & cleanup
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                const o = obstacles[i];
+                const dx = ball.position.x - o.position.x;
+                const dz = ball.position.z - o.position.z;
+                const dist = Math.sqrt(dx*dx + dz*dz);
+
+                // Collision when ball touches cone (ball radius 0.4 + cone ~0.2)
+                if (dist < 0.5) {
+                    gameOver();
+                    return;
+                }
+
+                if (o.position.z > ball.position.z + 1 && !o.userData.passed) {
+                    o.userData.passed = true;
+                    score++;
+                }
+
+                if (o.position.z > ball.position.z + 10) {
+                    scene.remove(o);
+                    obstacles.splice(i, 1);
+                }
+            }
+
+            // Update UI
+            document.getElementById('scoreValue').textContent = score;
+
+            // Speed up
+            speed = Math.min(speed + dt * 0.3, CONFIG.maxSpeed);
+
+            renderer.render(scene, camera);
+        }
+
+        function onResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // ============ START ============
+        init();
+    </script>
+</body>
+</html>

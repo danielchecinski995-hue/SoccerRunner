@@ -1,0 +1,439 @@
+/* ===============================
+   Soccer Runner - K11 Studio
+   =============================== */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #1a472a 0%, #2d5a3f 50%, #1a472a 100%);
+    min-height: 100vh;
+    overflow: hidden;
+    color: white;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ===============================
+   Loading Screen
+   =============================== */
+
+#loading-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #0d2818 0%, #1a472a 100%);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.loading-content {
+    text-align: center;
+}
+
+.loading-content h1 {
+    font-size: 3rem;
+    margin-bottom: 2rem;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+}
+
+.loading-spinner {
+    width: 60px;
+    height: 60px;
+    border: 5px solid rgba(255,255,255,0.3);
+    border-top-color: #4ade80;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+#loading-status {
+    color: #a7f3d0;
+    margin-bottom: 1rem;
+}
+
+.loading-bar {
+    width: 300px;
+    height: 10px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+#loading-progress {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #4ade80, #22c55e);
+    transition: width 0.3s ease;
+}
+
+/* ===============================
+   Menu Screen
+   =============================== */
+
+#menu-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+}
+
+.menu-content {
+    text-align: center;
+    max-width: 600px;
+    width: 100%;
+}
+
+.menu-content h1 {
+    font-size: 3.5rem;
+    margin-bottom: 0.5rem;
+    text-shadow: 3px 3px 6px rgba(0,0,0,0.5);
+    background: linear-gradient(180deg, #fff 0%, #a7f3d0 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.subtitle {
+    color: #86efac;
+    font-size: 1.2rem;
+    margin-bottom: 2rem;
+}
+
+.instructions {
+    background: rgba(0,0,0,0.3);
+    padding: 1.5rem;
+    border-radius: 15px;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.instructions h3 {
+    color: #4ade80;
+    margin-bottom: 0.5rem;
+}
+
+.instructions p {
+    color: #d1fae5;
+    line-height: 1.6;
+    margin-bottom: 0.5rem;
+}
+
+/* Camera Preview */
+.camera-preview-container {
+    position: relative;
+    width: 100%;
+    max-width: 400px;
+    margin: 0 auto 1.5rem;
+    border-radius: 15px;
+    overflow: hidden;
+    border: 3px solid #4ade80;
+    box-shadow: 0 0 20px rgba(74, 222, 128, 0.3);
+}
+
+#camera-preview {
+    width: 100%;
+    height: auto;
+    display: block;
+    transform: scaleX(-1);
+}
+
+#debug-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    transform: scaleX(-1);
+}
+
+#tracking-status {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0,0,0,0.7);
+    padding: 0.5rem;
+    font-size: 0.9rem;
+}
+
+#ball-status {
+    color: #fbbf24;
+}
+
+#ball-status.detected {
+    color: #4ade80;
+}
+
+/* Buttons */
+button {
+    background: linear-gradient(180deg, #4ade80 0%, #22c55e 100%);
+    color: #0d2818;
+    border: none;
+    padding: 1rem 3rem;
+    font-size: 1.3rem;
+    font-weight: bold;
+    border-radius: 50px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(74, 222, 128, 0.4);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+button:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(74, 222, 128, 0.6);
+}
+
+button:disabled {
+    background: #6b7280;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+.error {
+    color: #f87171;
+    margin-top: 1rem;
+}
+
+.high-score {
+    margin-top: 2rem;
+    font-size: 1.2rem;
+    color: #fbbf24;
+}
+
+#high-score {
+    font-weight: bold;
+    font-size: 1.5rem;
+}
+
+/* ===============================
+   Game Screen
+   =============================== */
+
+#game-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#game-container {
+    width: 100%;
+    height: 100%;
+}
+
+#game-container canvas {
+    display: block;
+}
+
+/* Game HUD */
+#game-hud {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 20px;
+    pointer-events: none;
+}
+
+.hud-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.score-display, .speed-display {
+    background: rgba(0,0,0,0.6);
+    padding: 15px 25px;
+    border-radius: 15px;
+    border: 2px solid rgba(74, 222, 128, 0.5);
+}
+
+.score-display .label, .speed-display .label {
+    display: block;
+    font-size: 0.8rem;
+    color: #86efac;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+#score, #speed {
+    font-size: 2rem;
+    font-weight: bold;
+}
+
+#score {
+    color: #fbbf24;
+}
+
+#speed {
+    color: #4ade80;
+}
+
+/* Mini Camera */
+#mini-camera {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 180px;
+    height: 135px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 2px solid rgba(74, 222, 128, 0.5);
+    background: #000;
+    pointer-events: none;
+}
+
+#mini-debug-canvas {
+    width: 100%;
+    height: 100%;
+}
+
+/* Pause Button */
+#pause-button {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 50px;
+    height: 50px;
+    padding: 0;
+    font-size: 1.5rem;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    pointer-events: auto;
+}
+
+/* ===============================
+   Overlay Screens
+   =============================== */
+
+.overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.85);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 100;
+    backdrop-filter: blur(5px);
+}
+
+.overlay-content {
+    text-align: center;
+    padding: 3rem;
+    background: linear-gradient(135deg, rgba(26, 71, 42, 0.9) 0%, rgba(13, 40, 24, 0.9) 100%);
+    border-radius: 20px;
+    border: 2px solid #4ade80;
+    box-shadow: 0 0 40px rgba(74, 222, 128, 0.3);
+}
+
+.overlay-content h2 {
+    font-size: 2.5rem;
+    margin-bottom: 2rem;
+    color: #4ade80;
+}
+
+.overlay-content button {
+    display: block;
+    width: 100%;
+    margin-bottom: 1rem;
+}
+
+.overlay-content button:last-child {
+    margin-bottom: 0;
+}
+
+#quit-button, #menu-button {
+    background: linear-gradient(180deg, #6b7280 0%, #4b5563 100%);
+    color: white;
+}
+
+/* Final Score */
+.final-score {
+    margin-bottom: 1.5rem;
+}
+
+.final-score p {
+    color: #a7f3d0;
+    margin-bottom: 0.5rem;
+}
+
+#final-score {
+    font-size: 4rem;
+    font-weight: bold;
+    color: #fbbf24;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+}
+
+.new-record {
+    color: #f472b6;
+    font-size: 1.5rem;
+    font-weight: bold;
+    margin-bottom: 1.5rem;
+    animation: pulse 0.5s ease infinite alternate;
+}
+
+@keyframes pulse {
+    from { transform: scale(1); }
+    to { transform: scale(1.1); }
+}
+
+/* ===============================
+   Responsive
+   =============================== */
+
+@media (max-width: 600px) {
+    .menu-content h1 {
+        font-size: 2.5rem;
+    }
+
+    .camera-preview-container {
+        max-width: 100%;
+    }
+
+    button {
+        padding: 0.8rem 2rem;
+        font-size: 1.1rem;
+    }
+
+    #mini-camera {
+        width: 120px;
+        height: 90px;
+    }
+
+    .score-display, .speed-display {
+        padding: 10px 15px;
+    }
+
+    #score, #speed {
+        font-size: 1.5rem;
+    }
+}
