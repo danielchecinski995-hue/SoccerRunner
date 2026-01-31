@@ -94,6 +94,7 @@
             height: 100%;
             border-radius: 7px;
             pointer-events: none;
+            /* NO CSS mirror - we handle it in JS */
         }
         .instructions {
             text-align: center;
@@ -102,29 +103,31 @@
         }
         /* Menu camera setup */
         #menuCameraBox {
-            width: 400px;
-            height: 300px;
-            background: #222;
+            width: 320px;
+            height: 240px;
+            background: #333;
             border: 3px solid #0ea5e9;
-            border-radius: 15px;
-            margin: 20px;
+            border-radius: 10px;
+            margin: 10px;
             position: relative;
             overflow: hidden;
         }
-        #menuCameraBox video {
-            width: 100%;
-            height: 100%;
+        #menuVideo {
+            width: 320px;
+            height: 240px;
             object-fit: cover;
             transform: scaleX(-1);
             display: block;
+            background: #000;
         }
-        #menuCameraBox canvas {
+        #menuCanvas {
             position: absolute;
             top: 0;
             left: 0;
-            width: 100%;
-            height: 100%;
+            width: 320px;
+            height: 240px;
             pointer-events: none;
+            /* NO CSS mirror - we handle it in JS */
         }
         #cameraStatus {
             background: rgba(0,0,0,0.7);
@@ -145,12 +148,13 @@
     <div id="menu">
         <h1>SOCCER RUNNER</h1>
         <div class="instructions">
-            <p>Steruj pomaranczowa pilka przed kamera</p>
+            <p>Steruj kolorowa pilka przed kamera</p>
+            <p>(rozowa, pomaranczowa, czerwona, zolta)</p>
             <p>lub uzywaj strzalek ← →</p>
         </div>
         <div id="menuCameraBox">
-            <video id="menuVideo" autoplay playsinline muted></video>
-            <canvas id="menuCanvas"></canvas>
+            <video id="menuVideo" width="320" height="240" autoplay playsinline muted></video>
+            <canvas id="menuCanvas" width="320" height="240"></canvas>
         </div>
         <div id="cameraStatus">Kliknij "Wlacz kamere"</div>
         <button class="btn" id="cameraBtn">Wlacz kamere</button>
@@ -186,11 +190,14 @@
             spawnInterval: 12,      // Less frequent cones
             lanes: [-1.2, 0, 1.2],
             stripeSpacing: 4,       // Space between stripes
-            // CV
-            hueMin: 5,
-            hueMax: 35,
-            satMin: 70,
-            valMin: 70,
+            // CV - detect orange, red, pink balls
+            // Orange: 5-35, Red: 0-10 or 340-360, Pink: 300-340
+            hueRanges: [
+                { min: 0, max: 40 },      // Orange/Red
+                { min: 300, max: 360 }    // Pink/Magenta
+            ],
+            satMin: 40,   // Lower saturation threshold
+            valMin: 50,   // Lower brightness threshold
             smoothing: 0.3
         };
 
@@ -446,7 +453,7 @@
                 cameraBtn.textContent = 'Kamera OK!';
                 cameraBtn.style.background = '#22c55e';
                 startBtn.disabled = false;
-                status.textContent = 'Pokaz pomaranczowa pilke!';
+                status.textContent = 'Pokaz pilke przed kamera!';
                 status.className = '';
 
                 // Start detection loop for menu
@@ -466,91 +473,110 @@
         // Offscreen canvas for pixel processing
         let offscreenCanvas, offscreenCtx;
 
+        // Simple smoothed position (like runner.html)
+        let smoothedBallX = 0.5;
+
+        // Color detection - catches pink, red, orange, yellow balls
+        function isTargetColor(hsv) {
+            // Hue: 0-50 (red/orange/yellow) OR 290-360 (pink/magenta)
+            const isWarmColor = (hsv.h >= 0 && hsv.h <= 50) || (hsv.h >= 290 && hsv.h <= 360);
+            const isSaturated = hsv.s >= 25;
+            const isBright = hsv.v >= 40;
+            return isWarmColor && isSaturated && isBright;
+        }
+
+        // BLOB DETECTION - find the largest concentration of color
         function detectBallMenu() {
             if (!menuVideo || !cameraStream) return;
             if (document.getElementById('menu').classList.contains('hidden')) return;
-
-            const status = document.getElementById('cameraStatus');
-
-            // Make sure video has frames
-            if (menuVideo.readyState < 2 || menuVideo.videoWidth === 0) {
+            if (menuVideo.readyState < 2) {
                 requestAnimationFrame(detectBallMenu);
                 return;
             }
 
-            const vw = menuVideo.videoWidth;
-            const vh = menuVideo.videoHeight;
+            const status = document.getElementById('cameraStatus');
+            const vw = menuVideo.videoWidth || 320;
+            const vh = menuVideo.videoHeight || 240;
 
-            // Create offscreen canvas for pixel processing
+            // Create offscreen canvas
             if (!offscreenCanvas) {
                 offscreenCanvas = document.createElement('canvas');
+                offscreenCanvas.width = 160;
+                offscreenCanvas.height = 120;
                 offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
             }
-            offscreenCanvas.width = vw;
-            offscreenCanvas.height = vh;
 
-            // Draw video to offscreen canvas (not mirrored - for detection)
-            offscreenCtx.drawImage(menuVideo, 0, 0, vw, vh);
-
-            // Get pixels and detect orange
-            const img = offscreenCtx.getImageData(0, 0, vw, vh);
+            // Draw video to low-res canvas
+            offscreenCtx.drawImage(menuVideo, 0, 0, 160, 120);
+            const img = offscreenCtx.getImageData(0, 0, 160, 120);
             const d = img.data;
-            let sumX = 0, sumY = 0, count = 0;
 
-            for (let i = 0; i < d.length; i += 4) {
-                const hsv = rgbToHsv(d[i], d[i+1], d[i+2]);
-                if (hsv.h >= CONFIG.hueMin && hsv.h <= CONFIG.hueMax &&
-                    hsv.s >= CONFIG.satMin && hsv.v >= CONFIG.valMin) {
-                    const px = (i/4) % vw;
-                    const py = Math.floor((i/4) / vw);
-                    sumX += px;
-                    sumY += py;
-                    count++;
+            // Divide into 16 vertical columns, count matches per column
+            const NUM_COLS = 16;
+            const colWidth = 160 / NUM_COLS;  // 10 pixels per column
+            const colCounts = new Array(NUM_COLS).fill(0);
+            const colSumY = new Array(NUM_COLS).fill(0);
+            let totalCount = 0;
+
+            for (let y = 0; y < 120; y++) {
+                for (let x = 0; x < 160; x++) {
+                    const i = (y * 160 + x) * 4;
+                    const hsv = rgbToHsv(d[i], d[i+1], d[i+2]);
+                    if (isTargetColor(hsv)) {
+                        const col = Math.floor(x / colWidth);
+                        colCounts[col]++;
+                        colSumY[col] += y;
+                        totalCount++;
+                    }
                 }
             }
 
-            // Set overlay canvas size
+            // Find the column with max matches (the "blob")
+            let maxCol = 0;
+            let maxCount = 0;
+            for (let c = 0; c < NUM_COLS; c++) {
+                if (colCounts[c] > maxCount) {
+                    maxCount = colCounts[c];
+                    maxCol = c;
+                }
+            }
+
+            // Set overlay canvas
             menuCanvas.width = vw;
             menuCanvas.height = vh;
-
-            // Clear overlay (transparent)
             menuCtx.clearRect(0, 0, vw, vh);
 
-            if (count > 50) {
-                const cx = sumX / count;
-                const cy = sumY / count;
-                // Mirror X for display (video is CSS mirrored)
-                const displayX = vw - cx;
+            // Need enough pixels in the winning column
+            if (maxCount > 30) {
+                // X is center of winning column, normalized 0-1
+                const rawX = (maxCol + 0.5) / NUM_COLS;
+                // Y is average Y of that column
+                const rawY = colSumY[maxCol] / colCounts[maxCol] / 120;
 
-                detectedX = cx / vw;  // Not mirrored for game control
+                // Smooth position
+                smoothedBallX += (rawX - smoothedBallX) * 0.4;  // Faster response
+                detectedX = smoothedBallX;
                 ballDetected = true;
-                status.textContent = 'PILKA WYKRYTA! Mozesz grac!';
+
+                const pos = smoothedBallX < 0.4 ? 'LEWO' : smoothedBallX > 0.6 ? 'PRAWO' : 'SRODEK';
+                status.textContent = `${pos} (${smoothedBallX.toFixed(2)}) [${maxCount}px]`;
                 status.className = 'detected';
 
-                // Draw circle on overlay (mirrored position)
+                // Draw marker - invert X to match mirrored video
+                const displayX = (1 - smoothedBallX) * vw;
+                const displayY = rawY * vh;
                 menuCtx.strokeStyle = '#00ff00';
                 menuCtx.lineWidth = 4;
                 menuCtx.beginPath();
-                menuCtx.arc(displayX, cy, 50, 0, Math.PI*2);
-                menuCtx.stroke();
-
-                // Draw crosshair
-                menuCtx.beginPath();
-                menuCtx.moveTo(displayX - 60, cy);
-                menuCtx.lineTo(displayX + 60, cy);
-                menuCtx.moveTo(displayX, cy - 60);
-                menuCtx.lineTo(displayX, cy + 60);
+                menuCtx.arc(displayX, displayY, 50, 0, Math.PI*2);
                 menuCtx.stroke();
             } else {
                 ballDetected = false;
-                status.textContent = 'Pokaz pomaranczowa pilke...';
+                status.textContent = `Szukam pilki... [${totalCount}px total]`;
                 status.className = 'not-detected';
             }
 
-            // Continue loop if menu is visible
-            if (!document.getElementById('menu').classList.contains('hidden')) {
-                requestAnimationFrame(detectBallMenu);
-            }
+            requestAnimationFrame(detectBallMenu);
         }
 
         function rgbToHsv(r, g, b) {
@@ -567,75 +593,83 @@
             return { h, s: max === 0 ? 0 : d / max * 255, v: max * 255 };
         }
 
+        // BLOB DETECTION for game (same as menu)
         function detectBallGame() {
-            // Use the same camera stream from menu
             if (!menuVideo || !cameraStream || !isRunning) return;
-
-            video = document.getElementById('video');
-            debugCanvas = document.getElementById('debugCanvas');
-            debugCtx = debugCanvas.getContext('2d');
-
-            // Set stream to game preview video element
-            if (video.srcObject !== cameraStream) {
-                video.srcObject = cameraStream;
-                video.play();
-            }
-
             if (menuVideo.readyState < 2) {
                 if (isRunning) requestAnimationFrame(detectBallGame);
                 return;
             }
 
-            const vw = menuVideo.videoWidth;
-            const vh = menuVideo.videoHeight;
+            // Set stream to game preview
+            video = document.getElementById('video');
+            if (video.srcObject !== cameraStream) {
+                video.srcObject = cameraStream;
+                video.play();
+            }
 
-            // Use offscreen canvas for detection
+            // Use same offscreen canvas
             if (!offscreenCanvas) {
                 offscreenCanvas = document.createElement('canvas');
+                offscreenCanvas.width = 160;
+                offscreenCanvas.height = 120;
                 offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
             }
-            offscreenCanvas.width = vw;
-            offscreenCanvas.height = vh;
 
-            offscreenCtx.drawImage(menuVideo, 0, 0, vw, vh);
-
-            const img = offscreenCtx.getImageData(0, 0, vw, vh);
+            offscreenCtx.drawImage(menuVideo, 0, 0, 160, 120);
+            const img = offscreenCtx.getImageData(0, 0, 160, 120);
             const d = img.data;
-            let sumX = 0, sumY = 0, count = 0;
 
-            for (let i = 0; i < d.length; i += 4) {
-                const hsv = rgbToHsv(d[i], d[i+1], d[i+2]);
-                if (hsv.h >= CONFIG.hueMin && hsv.h <= CONFIG.hueMax &&
-                    hsv.s >= CONFIG.satMin && hsv.v >= CONFIG.valMin) {
-                    const px = (i/4) % vw;
-                    const py = Math.floor((i/4) / vw);
-                    sumX += px;
-                    sumY += py;
-                    count++;
+            // Column-based blob detection
+            const NUM_COLS = 16;
+            const colWidth = 10;
+            const colCounts = new Array(NUM_COLS).fill(0);
+            const colSumY = new Array(NUM_COLS).fill(0);
+
+            for (let y = 0; y < 120; y++) {
+                for (let x = 0; x < 160; x++) {
+                    const i = (y * 160 + x) * 4;
+                    const hsv = rgbToHsv(d[i], d[i+1], d[i+2]);
+                    if (isTargetColor(hsv)) {
+                        const col = Math.floor(x / colWidth);
+                        colCounts[col]++;
+                        colSumY[col] += y;
+                    }
                 }
             }
 
-            // Set overlay canvas size
-            debugCanvas.width = vw;
-            debugCanvas.height = vh;
-            debugCtx.clearRect(0, 0, vw, vh);
+            // Find column with max matches
+            let maxCol = 0, maxCount = 0;
+            for (let c = 0; c < NUM_COLS; c++) {
+                if (colCounts[c] > maxCount) {
+                    maxCount = colCounts[c];
+                    maxCol = c;
+                }
+            }
 
-            if (count > 30) {
-                const cx = sumX / count;
-                const cy = sumY / count;
-                const displayX = vw - cx;  // Mirror for display
+            // Setup debug canvas
+            debugCanvas = document.getElementById('debugCanvas');
+            debugCtx = debugCanvas.getContext('2d');
+            debugCanvas.width = 160;
+            debugCanvas.height = 120;
+            debugCtx.clearRect(0, 0, 160, 120);
 
-                detectedX = cx / vw;
+            if (maxCount > 30) {
+                const rawX = (maxCol + 0.5) / NUM_COLS;
+                const rawY = colSumY[maxCol] / colCounts[maxCol] / 120;
+
+                smoothedBallX += (rawX - smoothedBallX) * 0.4;
+                detectedX = smoothedBallX;
                 ballDetected = true;
 
-                // Draw marker on overlay
+                // Draw marker - invert X for mirrored video
+                const displayX = (1 - smoothedBallX) * 160;
+                const displayY = rawY * 120;
                 debugCtx.strokeStyle = '#00ff00';
                 debugCtx.lineWidth = 3;
                 debugCtx.beginPath();
-                debugCtx.arc(displayX, cy, 25, 0, Math.PI*2);
+                debugCtx.arc(displayX, displayY, 20, 0, Math.PI*2);
                 debugCtx.stroke();
-            } else {
-                ballDetected = false;
             }
 
             if (isRunning) requestAnimationFrame(detectBallGame);
@@ -690,11 +724,12 @@
 
             const dt = Math.min(clock.getDelta(), 0.1);
 
-            // Input
-            if (ballDetected) {
-                smoothedX += (detectedX - smoothedX) * CONFIG.smoothing;
-                targetX = (smoothedX - 0.5) * 2 * (CONFIG.trackWidth/2 - 0.5);
-            }
+            // Input - ALWAYS use last known ball position (detectedX is smoothed)
+            // Don't check ballDetected here - just follow the position
+            smoothedX += (detectedX - smoothedX) * CONFIG.smoothing;
+            targetX = (smoothedX - 0.5) * 2 * (CONFIG.trackWidth/2 - 0.5);
+
+            // Keyboard overrides camera control
             if (keys.left) targetX -= 4 * dt;
             if (keys.right) targetX += 4 * dt;
             targetX = Math.max(-CONFIG.trackWidth/2 + 0.5, Math.min(CONFIG.trackWidth/2 - 0.5, targetX));
